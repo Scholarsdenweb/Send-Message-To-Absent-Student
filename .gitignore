@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Environment / secrets (NEVER commit)
+.env
+.env.*
+!.env.example
+
+# Build output
+dist/
+build/
+
+# Logs
+*.log
+service.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# Windows service helper binary (download separately)
+windows-deploy/nssm.exe

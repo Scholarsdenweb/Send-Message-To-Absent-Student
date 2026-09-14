@@ -1,0 +1,83 @@
+// App-owned data (users, roles, SMS logs) in Neon Postgres.
+// The eTimeTrackLite biometric data stays in SQL Server, accessed via mssql.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  admin
+  member
+}
+
+model User {
+  id           String    @id @default(cuid())
+  name         String
+  email        String    @unique
+  passwordHash String
+  role         Role      @default(member)
+  isActive     Boolean   @default(true)
+  lastLogin    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  smsLogs      SmsLog[]
+
+  @@map("app_users")
+}
+
+model SmsLog {
+  id             String         @id @default(cuid())
+  sentBy         User?          @relation(fields: [sentById], references: [id], onDelete: SetNull)
+  sentById       String?
+  sentByName     String?
+  batchId        Int?
+  batchName      String?
+  date           String? // attendance date the SMS is about (YYYY-MM-DD)
+  totalAbsent    Int?
+  attempted      Int?
+  sent               Int?
+  failed             Int?
+  skippedNoPhone     Int?
+  skippedAlreadySent Int?
+  createdAt          DateTime   @default(now())
+
+  recipients     SmsRecipient[]
+
+  @@map("app_sms_logs")
+}
+
+model SmsRecipient {
+  id               String  @id @default(cuid())
+  smsLog           SmsLog  @relation(fields: [smsLogId], references: [id], onDelete: Cascade)
+  smsLogId         String
+  employeeCode     String?
+  name             String?
+  phone            String?
+  status           String? // sent | failed | skipped | alreadySent
+  providerResponse String?
+
+  @@map("app_sms_recipients")
+}
+
+// De-duplication guard: one successful "absent" SMS per student per day.
+// A row here means that student was already notified for that date.
+model SentAbsentSms {
+  id           String   @id @default(cuid())
+  employeeCode String
+  date         String // YYYY-MM-DD (the attendance date the SMS was about)
+  batchId      Int?
+  batchName    String?
+  name         String?
+  phone        String?
+  sentAt       DateTime @default(now())
+
+  @@unique([employeeCode, date])
+  @@index([date])
+  @@map("app_sent_absent_sms")
+}
