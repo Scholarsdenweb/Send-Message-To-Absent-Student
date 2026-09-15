@@ -28,6 +28,8 @@ router.post('/batches/assign', requireAuth, requireRole('admin'), upload.single(
 // ---- Attendance (read-only) ----
 router.get('/attendance/:batchId', requireAuth, h(attendance.batchAttendance));
 router.get('/attendance/:batchId/absentees', requireAuth, h(attendance.batchAbsentees));
+// Manually mark a no-punch student present (or revert): admin + member.
+router.post('/attendance/:batchId/override', requireAuth, requireRole('admin', 'member'), h(attendance.setOverride));
 
 // ---- SMS (admin + member) ----
 router.get('/sms/:batchId/sent', requireAuth, h(sms.sentStatus));

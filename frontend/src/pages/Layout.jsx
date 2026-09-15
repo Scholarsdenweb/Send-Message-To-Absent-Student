@@ -14,7 +14,13 @@ export default function Layout() {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand">Scholars Den · Attendance</div>
+        <div className="brand">
+          <span className="brand-mark">SD</span>
+          <span className="brand-text">
+            <strong>Scholars Den</strong>
+            <small>Attendance Portal</small>
+          </span>
+        </div>
         <nav className="nav">
           <NavLink to="/" end>Attendance</NavLink>
           {isAdmin && <NavLink to="/batches">Batches</NavLink>}
@@ -24,7 +30,7 @@ export default function Layout() {
         </nav>
         <div className="user-box">
           <span className="badge">{user?.role}</span>
-          <span className="muted">{user?.name}</span>
+          <span className="user-name">{user?.name}</span>
           <button className="btn ghost" onClick={handleLogout}>Logout</button>
         </div>
       </header>

@@ -81,3 +81,22 @@ model SentAbsentSms {
   @@index([date])
   @@map("app_sent_absent_sms")
 }
+
+// Manual attendance override. eTimeTrackLite marks a student "absent" when there
+// is no punch, but they may actually be present (forgot to punch). A row here with
+// status "present" forces that student present for the date, so no absent SMS goes out.
+model AttendanceOverride {
+  id           String   @id @default(cuid())
+  employeeCode String
+  date         String // YYYY-MM-DD
+  batchId      Int?
+  status       String // "present" (manual mark-present)
+  markedById   String?
+  markedByName String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([employeeCode, date])
+  @@index([date])
+  @@map("app_attendance_overrides")
+}

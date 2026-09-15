@@ -1,4 +1,5 @@
 const { sql, query } = require('../config/sqlserver');
+const { prisma } = require('../config/prisma');
 
 // eTimeTrackLite keeps raw punches in monthly tables: DeviceLogs_<month>_<year>.
 function logTableFor(dateStr) {
@@ -59,15 +60,31 @@ async function getBatchAttendance(batchId, dateStr) {
     for (const row of punches.recordset) punchesByUser[String(row.userId)] = row;
   }
 
+  // Manual "mark present" overrides for this date (app DB). A no-punch student
+  // whose teacher marked them present should not count as absent / get an SMS.
+  let overrideSet = new Set();
+  try {
+    const codes = roster.recordset.map((s) => String(s.employeeCode));
+    const overrides = await prisma.attendanceOverride.findMany({
+      where: { date: dateStr, status: 'present', employeeCode: { in: codes } },
+      select: { employeeCode: true },
+    });
+    overrideSet = new Set(overrides.map((o) => String(o.employeeCode)));
+  } catch (e) {
+    console.warn('[attendance] could not load overrides:', e.message);
+  }
+
   const students = roster.recordset.map((s) => {
     const punch = punchesByUser[String(s.employeeCode)];
     const present = !!punch;
+    const manualPresent = !present && overrideSet.has(String(s.employeeCode));
     return {
       employeeCode: s.employeeCode,
       name: s.name,
       phone: s.phone || '',
       empStatus: s.status || '',
-      status: present ? 'present' : 'absent',
+      status: present || manualPresent ? 'present' : 'absent',
+      manualPresent, // true = present only because a teacher marked them so
       firstIn: present ? formatTime(punch.firstIn) : null,
       lastOut: present ? formatTime(punch.lastOut) : null,
       punchCount: present ? punch.punchCount : 0,

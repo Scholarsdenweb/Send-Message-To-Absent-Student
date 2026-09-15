@@ -27,8 +27,13 @@ export default function Login() {
   return (
     <div className="login-wrap">
       <form className="card login-card" onSubmit={onSubmit}>
-        <h1>Scholars Den</h1>
-        <p className="muted">Attendance Portal — sign in</p>
+        <div className="login-brand">
+          <span className="brand-mark">SD</span>
+          <div>
+            <h1>Scholars Den</h1>
+            <p className="sub">Attendance Portal — sign in</p>
+          </div>
+        </div>
         <label>Email</label>
         <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
         <label>Password</label>
