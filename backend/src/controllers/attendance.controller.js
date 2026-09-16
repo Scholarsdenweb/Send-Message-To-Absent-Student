@@ -23,9 +23,11 @@ async function batchAbsentees(req, res) {
   return res.json(data);
 }
 
-// Manually mark a no-punch student present (status:'present'), or revert to
-// automatic punch-based status (status:'auto'). A 'present' override stops the
-// absent SMS from being sent to that student for the given date.
+// Manually override a student's status for a date:
+//   'present' — force a no-punch student present (stops the absent SMS)
+//   'absent'  — force a punched student absent (e.g. proxy punch; counts as
+//               absent and becomes eligible for the absent SMS)
+//   'auto'    — remove the override, revert to automatic punch-based status
 async function setOverride(req, res) {
   const { batchId } = req.params;
   const { employeeCode, date, status } = req.body || {};
@@ -39,12 +41,12 @@ async function setOverride(req, res) {
     return res.json({ ok: true, employeeCode: code, date, status: 'auto' });
   }
 
-  if (status !== 'present') {
-    return res.status(400).json({ message: "status must be 'present' or 'auto'" });
+  if (status !== 'present' && status !== 'absent') {
+    return res.status(400).json({ message: "status must be 'present', 'absent' or 'auto'" });
   }
 
   const data = {
-    status: 'present',
+    status,
     batchId: Number(batchId) || null,
     markedById: req.user.id,
     markedByName: req.user.name,

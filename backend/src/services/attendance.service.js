@@ -12,6 +12,48 @@ async function tableExists(table) {
   return r.recordset[0].id != null;
 }
 
+// The per-user punch aggregate for a (table, date) is the same no matter which
+// batch asks for it, so cache it briefly. This collapses the N parallel batch
+// loads the UI fires into a SINGLE table scan, and de-dupes concurrent callers
+// by caching the in-flight promise (not just the resolved value).
+const PUNCH_TTL_MS = Number(process.env.PUNCH_CACHE_TTL_MS) || 15000;
+const punchCache = new Map(); // key: `${table}|${dateStr}` -> { at, promise }
+
+function loadPunchesByUser(table, dateStr) {
+  const key = `${table}|${dateStr}`;
+  const hit = punchCache.get(key);
+  if (hit && Date.now() - hit.at < PUNCH_TTL_MS) return hit.promise;
+
+  const promise = (async () => {
+    const byUser = {};
+    if (await tableExists(table)) {
+      // Table name can't be parameterised; validate its shape first.
+      if (!/^DeviceLogs_\d+_\d+$/.test(table)) throw new Error('Bad log table');
+      // Sargable range (LogDate >= day AND < next day) so an index on LogDate
+      // can be used — no CAST wrapping the column.
+      const punches = await query(
+        `SELECT UserId AS userId,
+                MIN(LogDate) AS firstIn,
+                MAX(LogDate) AS lastOut,
+                COUNT(*) AS punchCount
+           FROM ${table}
+          WHERE LogDate >= @d AND LogDate < DATEADD(DAY, 1, @d)
+          GROUP BY UserId`,
+        { d: { type: sql.Date, value: dateStr } }
+      );
+      for (const row of punches.recordset) byUser[String(row.userId)] = row;
+    }
+    return byUser;
+  })();
+
+  punchCache.set(key, { at: Date.now(), promise });
+  // On failure, drop the entry so the next request retries instead of caching the error.
+  promise.catch(() => {
+    if (punchCache.get(key)?.promise === promise) punchCache.delete(key);
+  });
+  return promise;
+}
+
 // LogDate is stored as IST wall-clock; the driver returns a Date whose UTC
 // fields hold that value, so read it back with UTC getters (no tz shift).
 function formatTime(value) {
@@ -41,53 +83,46 @@ async function getBatchAttendance(batchId, dateStr) {
     { bid: { type: sql.Int, value: bid } }
   );
 
-  // Punches for the date (aggregated per user). Empty if that month's table is absent.
+  // Punches for the date (aggregated per user), cached + shared across batches.
   const table = logTableFor(dateStr);
-  const punchesByUser = {};
-  if (await tableExists(table)) {
-    // Table name can't be parameterised; it's validated by the regex shape below.
-    if (!/^DeviceLogs_\d+_\d+$/.test(table)) throw new Error('Bad log table');
-    const punches = await query(
-      `SELECT UserId AS userId,
-              MIN(LogDate) AS firstIn,
-              MAX(LogDate) AS lastOut,
-              COUNT(*) AS punchCount
-         FROM ${table}
-        WHERE CAST(LogDate AS DATE) = @d
-        GROUP BY UserId`,
-      { d: { type: sql.Date, value: dateStr } }
-    );
-    for (const row of punches.recordset) punchesByUser[String(row.userId)] = row;
-  }
+  const punchesByUser = await loadPunchesByUser(table, dateStr);
 
-  // Manual "mark present" overrides for this date (app DB). A no-punch student
-  // whose teacher marked them present should not count as absent / get an SMS.
-  let overrideSet = new Set();
+  // Manual overrides for this date (app DB). A teacher can force a no-punch
+  // student to "present" (no absent SMS), or force a punched student to
+  // "absent" (e.g. proxy punch) — which then counts as absent / gets an SMS.
+  let overrideByCode = {};
   try {
     const codes = roster.recordset.map((s) => String(s.employeeCode));
     const overrides = await prisma.attendanceOverride.findMany({
-      where: { date: dateStr, status: 'present', employeeCode: { in: codes } },
-      select: { employeeCode: true },
+      where: { date: dateStr, status: { in: ['present', 'absent'] }, employeeCode: { in: codes } },
+      select: { employeeCode: true, status: true },
     });
-    overrideSet = new Set(overrides.map((o) => String(o.employeeCode)));
+    for (const o of overrides) overrideByCode[String(o.employeeCode)] = o.status;
   } catch (e) {
     console.warn('[attendance] could not load overrides:', e.message);
   }
 
   const students = roster.recordset.map((s) => {
     const punch = punchesByUser[String(s.employeeCode)];
-    const present = !!punch;
-    const manualPresent = !present && overrideSet.has(String(s.employeeCode));
+    const hasPunch = !!punch;
+    const override = overrideByCode[String(s.employeeCode)]; // 'present' | 'absent' | undefined
+
+    // Override wins over the punch-based status; otherwise punch decides.
+    const status = override ? override : hasPunch ? 'present' : 'absent';
+
     return {
       employeeCode: s.employeeCode,
       name: s.name,
       phone: s.phone || '',
       empStatus: s.status || '',
-      status: present || manualPresent ? 'present' : 'absent',
-      manualPresent, // true = present only because a teacher marked them so
-      firstIn: present ? formatTime(punch.firstIn) : null,
-      lastOut: present ? formatTime(punch.lastOut) : null,
-      punchCount: present ? punch.punchCount : 0,
+      status,
+      manualPresent: override === 'present', // present because a teacher marked it
+      manualAbsent: override === 'absent',   // absent because a teacher marked it
+      overridden: !!override,                // any manual override is active
+      // Always expose punch details when they exist, even if overridden to absent.
+      firstIn: hasPunch ? formatTime(punch.firstIn) : null,
+      lastOut: hasPunch ? formatTime(punch.lastOut) : null,
+      punchCount: hasPunch ? punch.punchCount : 0,
     };
   });
 

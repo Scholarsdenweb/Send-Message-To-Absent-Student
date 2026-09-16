@@ -57,6 +57,9 @@ export default function Attendance() {
       setLoading(true); setData(null); setSmsResult(null);
     }
     try {
+      // Fetch attendance and the "already notified" status in parallel — they
+      // don't depend on each other, so no need to wait for one before the other.
+      const sentPromise = loadSentStatus();
       const results = await Promise.all(
         batchIds.map((id) => api.get(`/attendance/${id}`, { params: { date } }).then((r) => r.data))
       );
@@ -81,7 +84,7 @@ export default function Attendance() {
         students,
         summary: { total: students.length, present, absent: students.length - present },
       });
-      await loadSentStatus();
+      await sentPromise;
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to load attendance');
     } finally {
@@ -126,13 +129,20 @@ export default function Attendance() {
     setError('');
 
     // Optimistic update: change the row immediately so there is no flicker or
-    // blank list while the request is in flight.
-    if (status === 'present') {
+    // blank list while the request is in flight. ('auto' reverts to the
+    // punch-based status, which only the server knows, so reload silently.)
+    if (status === 'present' || status === 'absent') {
       setData((prev) => {
         if (!prev) return prev;
         const students = prev.students.map((s) =>
           String(s.employeeCode) === String(employeeCode) && s.batchId === batchId
-            ? { ...s, status: 'present', manualPresent: true }
+            ? {
+                ...s,
+                status,
+                manualPresent: status === 'present',
+                manualAbsent: status === 'absent',
+                overridden: true,
+              }
             : s
         );
         const present = students.filter((s) => s.status === 'present').length;
@@ -325,7 +335,7 @@ export default function Attendance() {
                       <td>{s.name}</td>
                       <td>
                         <span className={`pill ${s.status}`}>{s.status}</span>
-                        {s.manualPresent && <span className="muted" style={{ marginLeft: 6 }}>(manual)</span>}
+                        {s.overridden && <span className="muted" style={{ marginLeft: 6 }}>(manual)</span>}
                       </td>
                       <td>{s.firstIn || '—'}</td>
                       <td>{s.lastOut || '—'}</td>
@@ -333,19 +343,25 @@ export default function Attendance() {
                       <td>{s.phone || '—'}</td>
                       <td>{s.status === 'absent' ? (notified ? <span className="pill sent">✓ sent</span> : <span className="muted">—</span>) : ''}</td>
                       <td>
-                        {s.status === 'absent' ? (
-                          <button type="button" className="btn small" disabled={busy}
-                            onClick={() => setPresence(s.employeeCode, s.batchId, 'present')}
-                            title="Student was present but did not punch — mark present so no absent SMS is sent">
-                            {busy ? 'Saving…' : 'Mark Present'}
-                          </button>
-                        ) : s.manualPresent ? (
+                        {s.overridden ? (
                           <button type="button" className="btn small" disabled={busy}
                             onClick={() => setPresence(s.employeeCode, s.batchId, 'auto')}
                             title="Undo manual mark — revert to punch-based status">
                             {busy ? 'Saving…' : 'Undo'}
                           </button>
-                        ) : ''}
+                        ) : s.status === 'absent' ? (
+                          <button type="button" className="btn small" disabled={busy}
+                            onClick={() => setPresence(s.employeeCode, s.batchId, 'present')}
+                            title="Student was present but did not punch — mark present so no absent SMS is sent">
+                            {busy ? 'Saving…' : 'Mark Present'}
+                          </button>
+                        ) : (
+                          <button type="button" className="btn small danger" disabled={busy}
+                            onClick={() => setPresence(s.employeeCode, s.batchId, 'absent')}
+                            title="Student has a punch but was actually absent — mark absent (counts as absent, may get SMS)">
+                            {busy ? 'Saving…' : 'Mark Absent'}
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
