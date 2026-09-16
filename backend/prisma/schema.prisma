@@ -90,7 +90,7 @@ model AttendanceOverride {
   employeeCode String
   date         String // YYYY-MM-DD
   batchId      Int?
-  status       String // "present" (manual mark-present)
+  status       String // "present" or "absent" (manual override)
   markedById   String?
   markedByName String?
   createdAt    DateTime @default(now())
